@@ -8,6 +8,7 @@ export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
     const file = formData.get("file") as File | null
+    const walletAddress = formData.get("walletAddress") as string | null
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 })
@@ -27,10 +28,13 @@ export async function POST(req: NextRequest) {
     const buffer = await file.arrayBuffer()
     const blobData = new Uint8Array(buffer)
 
-    // Expire in 7 days (microseconds)
     const expirationMicros = (Date.now() + 7 * 24 * 60 * 60 * 1000) * 1000
 
-    const blobName = `${Date.now()}-${file.name}`
+    // Namespace by wallet address so each user's files are separated
+    const prefix = walletAddress
+      ? `${walletAddress.slice(0, 10)}/`
+      : "shared/"
+    const blobName = `${prefix}${Date.now()}-${file.name}`
 
     await client.upload({
       blobData,
@@ -44,6 +48,7 @@ export async function POST(req: NextRequest) {
       blobName,
       fileName: file.name,
       size: file.size,
+      walletAddress: walletAddress ?? null,
       uploadedAt: new Date().toISOString(),
     })
   } catch (err: unknown) {

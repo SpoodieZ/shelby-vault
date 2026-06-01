@@ -1,6 +1,8 @@
 "use client"
 
 import { useState, useCallback, useEffect, useRef } from "react"
+import { useWallet } from "@aptos-labs/wallet-adapter-react"
+import { WalletButton } from "./WalletButton"
 
 interface FileEntry {
   blobName: string
@@ -131,6 +133,9 @@ function ShelbyHexLogo({ size = 36 }: { size?: number }) {
 }
 
 export default function FileVault() {
+  const { connected, account } = useWallet()
+  const walletAddress = account?.address?.toString() ?? null
+
   const [lang, setLang] = useState<Lang>("en")
   const [files, setFiles] = useState<FileEntry[]>([])
   const [uploading, setUploading] = useState(false)
@@ -174,6 +179,7 @@ export default function FileVault() {
     setUploadSuccess(null)
     const formData = new FormData()
     formData.append("file", file)
+    if (walletAddress) formData.append("walletAddress", walletAddress)
     try {
       const res = await fetch("/api/upload", { method: "POST", body: formData })
       const data = await res.json()
@@ -303,6 +309,9 @@ export default function FileVault() {
           }}>
             {lang === "vi" ? "🇻🇳" : "🇺🇸"} {tx.langLabel}
           </button>
+
+          {/* Wallet */}
+          <WalletButton />
         </div>
       </header>
 
@@ -319,6 +328,31 @@ export default function FileVault() {
               ? "Upload, lưu trữ và tải file từ mạng lưới Shelby toàn cầu"
               : "Upload, store and retrieve files from the global Shelby network"}
           </p>
+
+          {/* Wallet status */}
+          {connected && walletAddress ? (
+            <div style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              marginTop: 12, padding: "6px 14px", borderRadius: 999,
+              background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)",
+              fontSize: 12, color: "#15803d", fontWeight: 500,
+            }}>
+              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", display: "inline-block" }} />
+              {lang === "vi" ? "Đang upload với" : "Uploading as"}&nbsp;
+              <span style={{ fontFamily: "monospace" }}>
+                {walletAddress.slice(0, 8)}...{walletAddress.slice(-6)}
+              </span>
+            </div>
+          ) : (
+            <div style={{
+              display: "inline-flex", alignItems: "center", gap: 8,
+              marginTop: 12, padding: "6px 14px", borderRadius: 999,
+              background: "rgba(180,83,9,0.06)", border: "1px solid rgba(180,83,9,0.15)",
+              fontSize: 12, color: "#92400e", fontWeight: 500,
+            }}>
+              🔌 {lang === "vi" ? "Kết nối wallet để lưu file theo địa chỉ của bạn" : "Connect wallet to store files under your address"}
+            </div>
+          )}
         </div>
 
         {/* Upload Zone */}
