@@ -1,16 +1,14 @@
 import { ShelbyNodeClient } from "@shelby-protocol/sdk/node"
 import { Network } from "@aptos-labs/ts-sdk"
 
-// Shelby API requires Origin header even for server-side requests.
-// Patch globalThis.fetch once to inject it for all shelby.xyz / aptoslabs.com calls.
+const APP_ORIGIN =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://shelby-vault-alpha.vercel.app"
+
+// Shelby requires Origin header even for server-side requests (Node.js fetch doesn't add it).
+// Patch once at module load so all fetch calls to shelby.xyz / aptoslabs.com include it.
 if (typeof window === "undefined") {
-  const APP_ORIGIN =
-    process.env.NEXT_PUBLIC_APP_URL ?? "https://shelby-vault-alpha.vercel.app"
-  const _nativeFetch = globalThis.fetch
-  globalThis.fetch = function shelbyFetch(
-    input: RequestInfo | URL,
-    init?: RequestInit
-  ): Promise<Response> {
+  const _native = globalThis.fetch
+  globalThis.fetch = function (input, init) {
     const url =
       typeof input === "string"
         ? input
@@ -18,11 +16,11 @@ if (typeof window === "undefined") {
         ? input.href
         : (input as Request).url
     if (url.includes("shelby.xyz") || url.includes("aptoslabs.com")) {
-      const headers = new Headers(init?.headers as HeadersInit | undefined)
-      if (!headers.has("Origin")) headers.set("Origin", APP_ORIGIN)
-      return _nativeFetch(input, { ...init, headers })
+      const h = new Headers(init?.headers as HeadersInit)
+      if (!h.has("Origin")) h.set("Origin", APP_ORIGIN)
+      return _native(input, { ...init, headers: h })
     }
-    return _nativeFetch(input, init)
+    return _native(input, init)
   }
 }
 
@@ -34,6 +32,13 @@ export function getShelbyClient(): ShelbyNodeClient {
   _client = new ShelbyNodeClient({
     network: Network.SHELBYNET,
     apiKey: process.env.SHELBY_API_KEY || undefined,
+    // Pass Origin via Aptos clientConfig.HEADERS so fullnode + indexer get it too
+    aptos: {
+      clientConfig: {
+        API_KEY: process.env.SHELBY_API_KEY || undefined,
+        HEADERS: { Origin: APP_ORIGIN },
+      },
+    },
   })
 
   return _client
