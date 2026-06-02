@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { WalletButton } from "./WalletButton"
 
+type UploadStep = "idle" | "preparing" | "signing" | "storing" | "done"
+
 interface FileEntry {
   blobName: string
   size: number
@@ -38,6 +40,14 @@ function loadFromLocal(): LocalFile[] {
   } catch {
     return []
   }
+}
+
+const uploadStepLabel: Record<UploadStep, { vi: string; en: string }> = {
+  idle: { vi: "", en: "" },
+  preparing: { vi: "Đang tạo mã hoá...", en: "Generating erasure codes..." },
+  signing: { vi: "Chờ ký transaction trong ví...", en: "Waiting for wallet signature..." },
+  storing: { vi: "Đang lưu lên Shelby network...", en: "Storing on Shelby network..." },
+  done: { vi: "Hoàn tất!", en: "Done!" },
 }
 
 const t = {
@@ -133,12 +143,12 @@ function ShelbyHexLogo({ size = 36 }: { size?: number }) {
 }
 
 export default function FileVault({ onBack }: { onBack?: () => void }) {
-  const { connected, account } = useWallet()
+  const { connected, account, signAndSubmitTransaction } = useWallet()
   const walletAddress = account?.address?.toString() ?? null
 
   const [lang, setLang] = useState<Lang>("en")
   const [files, setFiles] = useState<FileEntry[]>([])
-  const [uploading, setUploading] = useState(false)
+  const [uploadStep, setUploadStep] = useState<UploadStep>("idle")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
@@ -147,6 +157,7 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
   const [usingLocal, setUsingLocal] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const tx = t[lang]
+  const uploading = uploadStep !== "idle" && uploadStep !== "done"
 
   const loadFiles = useCallback(async () => {
     setLoading(true)
@@ -174,32 +185,50 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
   useEffect(() => { loadFiles() }, [loadFiles])
 
   const uploadFile = async (file: File) => {
-    setUploading(true)
+    if (!connected || !walletAddress) {
+      setError(lang === "vi" ? "Vui lòng kết nối ví trước" : "Please connect your wallet first")
+      return
+    }
+
     setError(null)
     setUploadSuccess(null)
-    const formData = new FormData()
-    formData.append("file", file)
-    if (walletAddress) formData.append("walletAddress", walletAddress)
+
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
+      // ── Step 1: Server generates erasure commitments + tx payload ──
+      setUploadStep("preparing")
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("walletAddress", walletAddress)
 
-      // Save to localStorage so it shows even without indexer API key
-      saveToLocal({
-        blobName: data.blobName,
-        size: data.size,
-        expirationMicros: (Date.now() + 7 * 24 * 60 * 60 * 1000) * 1000,
-        creationMicros: Date.now() * 1000,
-        isWritten: true,
+      const prepRes = await fetch("/api/upload/prepare", { method: "POST", body: formData })
+      const prepData = await prepRes.json()
+      if (prepData.error) throw new Error(prepData.error)
+
+      const { token, blobName, txPayload, size, expirationMicros } = prepData
+
+      // ── Step 2: User signs register_blob transaction via wallet ──
+      setUploadStep("signing")
+      const txResult = await signAndSubmitTransaction({ data: txPayload })
+      const txHash = txResult.hash
+
+      // ── Step 3: Server verifies tx and uploads data to Shelby RPC ──
+      setUploadStep("storing")
+      const storeRes = await fetch("/api/upload/store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, txHash, walletAddress }),
       })
+      const storeData = await storeRes.json()
+      if (storeData.error) throw new Error(storeData.error)
 
+      saveToLocal({ blobName, size, expirationMicros, creationMicros: Date.now() * 1000, isWritten: true })
       setUploadSuccess(tx.uploadSuccess(file.name))
+      setUploadStep("done")
       await loadFiles()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed")
     } finally {
-      setUploading(false)
+      setUploadStep("idle")
     }
   }
 
@@ -392,8 +421,27 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
               <div style={{ animation: "spin 1.5s linear infinite", width: 40, height: 40 }}>
                 <ShelbyHexLogo size={40} />
               </div>
-              <p style={{ margin: 0, color: textPrimary, fontSize: 15, fontWeight: 600 }}>{tx.uploading}</p>
-              <p style={{ margin: 0, color: textMuted, fontSize: 13 }}>{tx.uploadingHint}</p>
+              {/* Step indicator */}
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {(["preparing", "signing", "storing"] as UploadStep[]).map((s) => (
+                  <div key={s} style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: uploadStep === s ? pink
+                      : (["preparing", "signing", "storing"] as UploadStep[]).indexOf(uploadStep) >
+                        (["preparing", "signing", "storing"] as UploadStep[]).indexOf(s)
+                        ? pinkDimBorder : border,
+                    transition: "all 0.3s",
+                  }} />
+                ))}
+              </div>
+              <p style={{ margin: 0, color: textPrimary, fontSize: 15, fontWeight: 600 }}>
+                {uploadStepLabel[uploadStep][lang]}
+              </p>
+              {uploadStep === "signing" && (
+                <p style={{ margin: 0, color: pink, fontSize: 12, fontWeight: 500 }}>
+                  {lang === "vi" ? "✓ Ví của bạn đang hiển thị popup xác nhận" : "✓ Your wallet popup is open — please approve"}
+                </p>
+              )}
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
