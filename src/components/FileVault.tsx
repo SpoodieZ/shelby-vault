@@ -155,6 +155,8 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
   const [dragOver, setDragOver] = useState(false)
   const [downloading, setDownloading] = useState<string | null>(null)
   const [usingLocal, setUsingLocal] = useState(false)
+  const [faucetLoading, setFaucetLoading] = useState(false)
+  const [faucetMsg, setFaucetMsg] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const tx = t[lang]
   const uploading = uploadStep !== "idle" && uploadStep !== "done"
@@ -183,6 +185,30 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
   }, [])
 
   useEffect(() => { loadFiles() }, [loadFiles])
+
+  const SHELBYUSD_FAUCET = `https://docs.shelby.xyz/apis/faucet/shelbyusd?address=${walletAddress ?? ""}&network=shelbynet`
+
+  const requestApt = async () => {
+    if (!walletAddress) return
+    setFaucetLoading(true)
+    setFaucetMsg(null)
+    try {
+      const res = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: walletAddress }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setFaucetMsg(lang === "vi" ? "✓ Đã nhận 1 APT testnet!" : "✓ Received 1 APT testnet!")
+      setTimeout(() => setFaucetMsg(null), 4000)
+    } catch (err) {
+      setFaucetMsg(err instanceof Error ? err.message : "Faucet failed")
+      setTimeout(() => setFaucetMsg(null), 5000)
+    } finally {
+      setFaucetLoading(false)
+    }
+  }
 
   const uploadFile = async (file: File) => {
     if (!connected || !walletAddress) {
@@ -371,17 +397,68 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
 
           {/* Wallet status */}
           {connected && walletAddress ? (
-            <div style={{
-              display: "inline-flex", alignItems: "center", gap: 8,
-              marginTop: 12, padding: "6px 14px", borderRadius: 999,
-              background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)",
-              fontSize: 12, color: "#15803d", fontWeight: 500,
-            }}>
-              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", display: "inline-block" }} />
-              {lang === "vi" ? "Đang upload với" : "Uploading as"}&nbsp;
-              <span style={{ fontFamily: "monospace" }}>
-                {walletAddress.slice(0, 8)}...{walletAddress.slice(-6)}
-              </span>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginTop: 12 }}>
+              {/* Wallet address badge */}
+              <div style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "6px 14px", borderRadius: 999,
+                background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)",
+                fontSize: 12, color: "#15803d", fontWeight: 500,
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", display: "inline-block" }} />
+                {lang === "vi" ? "Đang upload với" : "Uploading as"}&nbsp;
+                <span style={{ fontFamily: "monospace" }}>
+                  {walletAddress.slice(0, 8)}...{walletAddress.slice(-6)}
+                </span>
+              </div>
+
+              {/* Faucet widget */}
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "center",
+              }}>
+                <button
+                  onClick={requestApt}
+                  disabled={faucetLoading}
+                  style={{
+                    background: faucetLoading ? border : bgCard,
+                    border: `1px solid ${borderStrong}`,
+                    borderRadius: 999, cursor: faucetLoading ? "not-allowed" : "pointer",
+                    padding: "5px 14px", fontSize: 12, fontWeight: 600,
+                    color: faucetLoading ? textMuted : textSecondary,
+                    display: "flex", alignItems: "center", gap: 5, transition: "all 0.15s",
+                  }}
+                >
+                  {faucetLoading ? "..." : "⛽ " + (lang === "vi" ? "Nhận APT Testnet" : "Get APT Testnet")}
+                </button>
+
+                <a
+                  href={SHELBYUSD_FAUCET}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    background: bgCard, border: `1px solid ${borderStrong}`,
+                    borderRadius: 999, cursor: "pointer",
+                    padding: "5px 14px", fontSize: 12, fontWeight: 600,
+                    color: textSecondary, textDecoration: "none",
+                    display: "flex", alignItems: "center", gap: 5,
+                  }}
+                >
+                  💎 {lang === "vi" ? "Nhận ShelbyUSD" : "Get ShelbyUSD"}
+                </a>
+              </div>
+
+              {/* Faucet feedback */}
+              {faucetMsg && (
+                <div style={{
+                  fontSize: 12, fontWeight: 500,
+                  color: faucetMsg.startsWith("✓") ? "#15803d" : "#b91c1c",
+                  padding: "4px 12px", borderRadius: 999,
+                  background: faucetMsg.startsWith("✓") ? "rgba(34,197,94,0.08)" : "rgba(220,38,38,0.06)",
+                  border: `1px solid ${faucetMsg.startsWith("✓") ? "rgba(34,197,94,0.2)" : "rgba(220,38,38,0.15)"}`,
+                }}>
+                  {faucetMsg}
+                </div>
+              )}
             </div>
           ) : (
             <div style={{
