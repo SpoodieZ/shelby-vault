@@ -132,7 +132,7 @@ function ShelbyHexLogo({ size = 36 }: { size?: number }) {
   )
 }
 
-export default function FileVault() {
+export default function FileVault({ onBack }: { onBack?: () => void }) {
   const { connected, account } = useWallet()
   const walletAddress = account?.address?.toString() ?? null
 
@@ -279,6 +279,17 @@ export default function FileVault() {
         height: 64,
         display: "flex", alignItems: "center", gap: 12,
       }}>
+        {onBack && (
+          <button onClick={onBack} style={{
+            background: "none", border: "none", cursor: "pointer",
+            color: textSecondary, fontSize: 13, fontWeight: 600,
+            display: "flex", alignItems: "center", gap: 5,
+            padding: "4px 8px", borderRadius: 8,
+            marginRight: 4,
+          }}>
+            ← Home
+          </button>
+        )}
         <ShelbyHexLogo size={32} />
         <div>
           <span style={{ fontSize: 17, fontWeight: 700, color: textPrimary, letterSpacing: "-0.02em" }}>Shelby Vault</span>
