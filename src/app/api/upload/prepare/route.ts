@@ -6,6 +6,7 @@ import {
   SHELBY_DEPLOYER,
   defaultErasureCodingConfig,
 } from "@shelby-protocol/sdk/node"
+import { Hex } from "@aptos-labs/ts-sdk"
 
 export const maxDuration = 60
 
@@ -46,27 +47,26 @@ export async function POST(req: NextRequest) {
     const token = crypto.randomUUID()
     pending.set(token, { blobData, blobName, expirationMicros })
 
-    // The blobMerkleRoot is a hex string — keep it as hex, NOT Uint8Array.
-    // Uint8Array is lost in JSON serialization (becomes {} or null).
-    // Aptos wallet adapter accepts "0x..." hex strings for vector<u8> args.
-    const merkleRootHex = commitments.blob_merkle_root.startsWith("0x")
-      ? commitments.blob_merkle_root
-      : `0x${commitments.blob_merkle_root}`
+    // Merkle root: decode hex → Uint8Array → plain number[] (32 elements).
+    // Uint8Array is lost in JSON. Hex string is treated as UTF-8 (64 bytes, not 32).
+    // number[] serializes cleanly and Aptos wallet adapter accepts it for vector<u8>.
+    const merkleRootBytes = Array.from(
+      Hex.fromHexString(commitments.blob_merkle_root).toUint8Array()
+    )
 
-    // expirationMicros > Number.MAX_SAFE_INTEGER — send as string to avoid precision loss.
-    // Aptos wallet adapter accepts string for u64 args.
+    // expirationMicros > Number.MAX_SAFE_INTEGER → send as string to avoid precision loss.
     const expirationStr = expirationMicros.toString()
 
     const txPayload = {
       function: `${SHELBY_DEPLOYER}::blob_metadata::register_blob` as `${string}::${string}::${string}`,
       functionArguments: [
-        blobName,          // blob name (string)
-        expirationStr,     // expiration micros (u64 as string)
-        merkleRootHex,     // blob merkle root (vector<u8> as 0x hex)
-        numChunksets,      // num chunksets (u64)
-        blobData.length,   // blob size (u64)
-        0,                 // reserved field
-        config.enumIndex,  // encoding variant (u8)
+        blobName,           // string
+        expirationStr,      // u64 as string
+        merkleRootBytes,    // vector<u8> as Array<number> — 32 elements, JSON-safe
+        numChunksets,       // u64
+        blobData.length,    // u64
+        0,                  // reserved
+        config.enumIndex,   // u8
       ],
     }
 
