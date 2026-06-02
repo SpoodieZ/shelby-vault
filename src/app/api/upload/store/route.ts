@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server"
 import { Account, Ed25519PrivateKey, Aptos, AptosConfig, Network } from "@aptos-labs/ts-sdk"
-import { getShelbyClient } from "@/lib/shelby"
+import { getShelbyClient, getAccountAddress, getPrivateKey } from "@/lib/shelby"
 import { pending } from "../prepare/route"
 
 export const maxDuration = 60
+
+const APP_ORIGIN =
+  process.env.NEXT_PUBLIC_APP_URL ?? "https://shelby-vault-alpha.vercel.app"
 
 const aptos = new Aptos(
   new AptosConfig({
     network: Network.SHELBYNET,
     clientConfig: {
       API_KEY: process.env.SHELBY_API_KEY || undefined,
-      HEADERS: {
-        Origin: process.env.NEXT_PUBLIC_APP_URL ?? "https://shelby-vault-alpha.vercel.app",
-      },
+      HEADERS: { Origin: APP_ORIGIN },
     },
   })
 )
@@ -26,31 +27,30 @@ export async function POST(req: NextRequest) {
     }
 
     const entry = pending.get(token)
-    if (!entry) return NextResponse.json({ error: "Upload session expired or invalid" }, { status: 400 })
+    if (!entry) {
+      return NextResponse.json({ error: "Upload session expired or invalid token" }, { status: 400 })
+    }
 
     const { blobData, blobName, expirationMicros } = entry
 
-    // Verify the transaction was committed on-chain
+    // Verify the authorization transaction was committed on-chain
     const txInfo = await aptos.waitForTransaction({ transactionHash: txHash })
     if (!txInfo.success) {
       pending.delete(token)
-      return NextResponse.json({ error: "Transaction failed on-chain" }, { status: 400 })
+      return NextResponse.json({ error: "Authorization transaction failed on-chain" }, { status: 400 })
     }
 
-    // Upload data to Shelby RPC using server account
-    // (blob registered by user wallet, data stored via server key)
+    // Upload using server account as blob owner (server key owns the blob on Shelby RPC)
     const client = getShelbyClient()
-    const privateKey = process.env.SHELBY_ACCOUNT_PRIVATE_KEY
-    if (!privateKey) throw new Error("SHELBY_ACCOUNT_PRIVATE_KEY not set")
-
     const serverAccount = Account.fromPrivateKey({
-      privateKey: new Ed25519PrivateKey(privateKey),
+      privateKey: new Ed25519PrivateKey(getPrivateKey()),
     })
 
-    await client.rpc.putBlobResumable({
-      account: serverAccount,
-      blobName,
+    await client.upload({
       blobData,
+      signer: serverAccount,
+      blobName,
+      expirationMicros,
     })
 
     pending.delete(token)

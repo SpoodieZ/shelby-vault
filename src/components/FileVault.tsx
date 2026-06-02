@@ -45,7 +45,7 @@ function loadFromLocal(): LocalFile[] {
 const uploadStepLabel: Record<UploadStep, { vi: string; en: string }> = {
   idle: { vi: "", en: "" },
   preparing: { vi: "Đang tạo mã hoá...", en: "Generating erasure codes..." },
-  signing: { vi: "Chờ ký transaction trong ví...", en: "Waiting for wallet signature..." },
+  signing: { vi: "Xác nhận thanh toán trong ví...", en: "Approve payment in wallet..." },
   storing: { vi: "Đang lưu lên Shelby network...", en: "Storing on Shelby network..." },
   done: { vi: "Hoàn tất!", en: "Done!" },
 }
@@ -439,7 +439,9 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
               </p>
               {uploadStep === "signing" && (
                 <p style={{ margin: 0, color: pink, fontSize: 12, fontWeight: 500 }}>
-                  {lang === "vi" ? "✓ Ví của bạn đang hiển thị popup xác nhận" : "✓ Your wallet popup is open — please approve"}
+                  {lang === "vi"
+                    ? "✓ Ví Petra đang mở — xác nhận giao dịch 0.00001 APT để upload"
+                    : "✓ Petra wallet open — approve 0.00001 APT to authorize upload"}
                 </p>
               )}
             </div>
