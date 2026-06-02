@@ -419,21 +419,6 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
           )}
         </div>
 
-        {/* Local mode notice */}
-        {usingLocal && (
-          <div style={{
-            background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.25)",
-            borderRadius: 12, padding: "10px 16px", marginBottom: 16,
-            color: "#92400E", fontSize: 13, display: "flex", alignItems: "center", gap: 8,
-          }}>
-            <span>⚠️</span>
-            <span>
-              {lang === "vi"
-                ? "Indexer chưa có API key — danh sách file lưu trên trình duyệt này. File vẫn được upload lên Shelby network bình thường."
-                : "Indexer API key not set — file list is stored in this browser. Files are still uploaded to the Shelby network normally."}
-            </span>
-          </div>
-        )}
 
         {/* Success / Error */}
         {uploadSuccess && (
