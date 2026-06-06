@@ -37,8 +37,10 @@ export async function GET(req: NextRequest) {
       offset += chunk.length
     }
 
-    // Strip the timestamp prefix to get original filename
-    const originalName = blobName.replace(/^\d+-/, "")
+    // Strip folder path and timestamp prefix to get original filename
+    // blobName may be "0x80c417d7/documents/1717680000000-report.pdf"
+    const lastSegment = blobName.split("/").pop() ?? blobName
+    const originalName = lastSegment.replace(/^\d+-/, "")
 
     return new NextResponse(combined, {
       headers: {

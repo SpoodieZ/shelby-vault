@@ -42,7 +42,10 @@ export async function POST(req: NextRequest) {
     await generateCommitments(provider, blobData) // validate the data
 
     const expirationMicros = (Date.now() + 7 * 24 * 60 * 60 * 1000) * 1000
-    const blobName = `${walletAddress.slice(0, 10)}/${Date.now()}-${file.name}`
+    // folderPath: "documents/work" → "0x80c417d7/documents/work/timestamp-name"
+    const rawFolder = (formData.get("folderPath") as string | null)?.trim() ?? ""
+    const folderPath = rawFolder.replace(/^\/+|\/+$/g, "").replace(/[^\w\s\-./]/g, "")
+    const blobName = `${walletAddress.slice(0, 10)}/${folderPath ? folderPath + "/" : ""}${Date.now()}-${file.name}`
     const token = crypto.randomUUID()
 
     pending.set(token, { blobData, blobName, expirationMicros, walletAddress })

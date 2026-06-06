@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useRef, useMemo, Fragment } from "react"
 import { useWallet } from "@aptos-labs/wallet-adapter-react"
 import { WalletButton } from "./WalletButton"
 
@@ -24,6 +24,11 @@ interface LocalFile {
   expirationMicros: number
   creationMicros: number
   isWritten: boolean
+}
+
+interface ParsedFileEntry extends FileEntry {
+  folderSegments: string[]  // e.g. ["documents", "work"]
+  displayName: string       // e.g. "report.pdf" (timestamp stripped)
 }
 
 function saveToLocal(file: LocalFile) {
@@ -71,6 +76,14 @@ const t = {
     downloading: "...",
     footer: "Powered by Shelby Protocol · Aptos Blockchain",
     langLabel: "EN",
+    newFolder: "Thư mục mới",
+    createFolder: "Tạo",
+    folderInputPlaceholder: "Tên thư mục...",
+    emptyFolderTitle: "Thư mục trống",
+    emptyFolderHint: "Upload file vào đây để bắt đầu",
+    folders: "thư mục",
+    files: "file",
+    backToRoot: "Tất cả file",
   },
   en: {
     subtitle: "Decentralized Storage on Shelbynet",
@@ -92,6 +105,14 @@ const t = {
     downloading: "...",
     footer: "Powered by Shelby Protocol · Aptos Blockchain",
     langLabel: "VI",
+    newFolder: "New Folder",
+    createFolder: "Create",
+    folderInputPlaceholder: "Folder name...",
+    emptyFolderTitle: "Empty folder",
+    emptyFolderHint: "Upload files here to get started",
+    folders: "folders",
+    files: "files",
+    backToRoot: "All files",
   },
 }
 
@@ -105,6 +126,27 @@ function formatBytes(bytes: number): string {
 
 function getFileName(blobName: string): string {
   return blobName.replace(/^\d+-/, "")
+}
+
+// Extract just the display name from a full blobName (handles folder paths)
+function getFileDisplayName(blobName: string): string {
+  const lastSegment = blobName.split("/").pop() ?? blobName
+  return lastSegment.replace(/^\d+-/, "")
+}
+
+// Parse a blobName into folder segments + display name
+// blobName format: {walletPrefix}/{folder1}/{folder2}/{timestamp}-{filename}
+function parseFileEntry(blobName: string, walletAddr: string | null): {
+  folderSegments: string[]
+  displayName: string
+} {
+  const prefix = walletAddr ? `${walletAddr.slice(0, 10)}/` : "shared/"
+  const stripped = blobName.startsWith(prefix) ? blobName.slice(prefix.length) : blobName
+  const parts = stripped.split("/")
+  const fileSegment = parts[parts.length - 1]
+  const folderSegments = parts.slice(0, -1)
+  const displayName = fileSegment.replace(/^\d+-/, "")
+  return { folderSegments, displayName }
 }
 
 function getFileIcon(name: string): string {
@@ -157,9 +199,50 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
   const [usingLocal, setUsingLocal] = useState(false)
   const [faucetLoading, setFaucetLoading] = useState(false)
   const [faucetMsg, setFaucetMsg] = useState<string | null>(null)
+  const [currentPath, setCurrentPath] = useState<string[]>([])
+  const [newFolderInput, setNewFolderInput] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const newFolderRef = useRef<HTMLInputElement>(null)
   const tx = t[lang]
   const uploading = uploadStep !== "idle" && uploadStep !== "done"
+
+  // Compute folders + files visible at the current navigation path
+  const { viewFolders, viewFiles } = useMemo(() => {
+    const subfoldersMap = new Map<string, number>()
+    const directFiles: ParsedFileEntry[] = []
+    const walletPrefix = walletAddress ? `${walletAddress.slice(0, 10)}/` : null
+
+    for (const file of files) {
+      // When wallet connected, only show that user's files
+      if (walletPrefix && !file.blobName.startsWith(walletPrefix)) continue
+
+      const { folderSegments, displayName } = parseFileEntry(file.blobName, walletAddress)
+      if (currentPath.length > folderSegments.length) continue
+      const pathMatches = currentPath.every((seg, i) => folderSegments[i] === seg)
+      if (!pathMatches) continue
+
+      if (folderSegments.length === currentPath.length) {
+        directFiles.push({ ...file, folderSegments, displayName })
+      } else {
+        const nextSeg = folderSegments[currentPath.length]
+        subfoldersMap.set(nextSeg, (subfoldersMap.get(nextSeg) ?? 0) + 1)
+      }
+    }
+
+    return {
+      viewFolders: [...subfoldersMap.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([name, count]) => ({ name, count })),
+      viewFiles: directFiles.sort((a, b) => (b.creationMicros ?? 0) - (a.creationMicros ?? 0)),
+    }
+  }, [files, currentPath, walletAddress])
+
+  const handleCreateFolder = () => {
+    const name = (newFolderInput ?? "").trim()
+    if (!name) return
+    setCurrentPath(prev => [...prev, name])
+    setNewFolderInput(null)
+  }
 
   const loadFiles = useCallback(async () => {
     setLoading(true)
@@ -225,6 +308,7 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
       const formData = new FormData()
       formData.append("file", file)
       formData.append("walletAddress", walletAddress)
+      formData.append("folderPath", currentPath.join("/"))
 
       const prepRes = await fetch("/api/upload/prepare", { method: "POST", body: formData })
       const prepData = await prepRes.json()
@@ -283,7 +367,7 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url
-      a.download = getFileName(blobName)
+      a.download = getFileDisplayName(blobName)
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
@@ -577,42 +661,149 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
           overflow: "hidden",
           boxShadow: "0 1px 3px rgba(44,26,20,0.06)",
         }}>
-          {/* Card header */}
+          {/* Card header: breadcrumb + New Folder + Refresh */}
           <div style={{
             padding: "16px 20px",
             borderBottom: `1px solid ${border}`,
             display: "flex", alignItems: "center", justifyContent: "space-between",
+            gap: 8, flexWrap: "wrap",
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {/* Left: logo + breadcrumb + count */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
               <ShelbyHexLogo size={20} />
-              <span style={{ fontWeight: 600, fontSize: 14, color: textPrimary }}>
-                {tx.fileListTitle}
-              </span>
+              {/* Breadcrumb */}
+              <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", minWidth: 0 }}>
+                <span
+                  onClick={() => setCurrentPath([])}
+                  style={{
+                    cursor: "pointer",
+                    fontWeight: currentPath.length === 0 ? 700 : 500,
+                    fontSize: 14,
+                    color: currentPath.length === 0 ? textPrimary : pink,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {tx.fileListTitle}
+                </span>
+                {currentPath.map((seg, i) => (
+                  <Fragment key={i}>
+                    <span style={{ color: textMuted, fontSize: 13, userSelect: "none" }}>›</span>
+                    <span
+                      onClick={() => setCurrentPath(currentPath.slice(0, i + 1))}
+                      style={{
+                        cursor: "pointer",
+                        fontSize: 13,
+                        fontWeight: i === currentPath.length - 1 ? 700 : 500,
+                        color: i === currentPath.length - 1 ? textPrimary : pink,
+                        maxWidth: 120,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {seg}
+                    </span>
+                  </Fragment>
+                ))}
+              </div>
               {!loading && (
                 <span style={{
                   fontSize: 11, fontWeight: 600, padding: "2px 8px",
-                  borderRadius: 999, background: pinkDim, color: pink,
+                  borderRadius: 999, background: pinkDim, color: pink, flexShrink: 0,
                 }}>
-                  {files.length}
+                  {viewFolders.length + viewFiles.length}
                 </span>
               )}
             </div>
-            <button
-              onClick={loadFiles}
-              disabled={loading}
-              style={{
-                background: "none", border: `1px solid ${border}`,
-                borderRadius: 8, color: textSecondary,
-                cursor: loading ? "not-allowed" : "pointer",
-                padding: "5px 14px", fontSize: 12, fontWeight: 500,
-                transition: "all 0.15s",
-              }}
-            >
-              {loading ? tx.refreshing : tx.refresh}
-            </button>
+
+            {/* Right: New Folder + Refresh */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              <button
+                onClick={() => {
+                  setNewFolderInput("")
+                  setTimeout(() => newFolderRef.current?.focus(), 50)
+                }}
+                style={{
+                  background: pinkDim, border: `1px solid ${pinkDimBorder}`,
+                  borderRadius: 8, color: pink,
+                  cursor: "pointer",
+                  padding: "5px 12px", fontSize: 12, fontWeight: 600,
+                  display: "flex", alignItems: "center", gap: 4,
+                  transition: "all 0.15s",
+                }}
+              >
+                + {tx.newFolder}
+              </button>
+              <button
+                onClick={loadFiles}
+                disabled={loading}
+                style={{
+                  background: "none", border: `1px solid ${border}`,
+                  borderRadius: 8, color: textSecondary,
+                  cursor: loading ? "not-allowed" : "pointer",
+                  padding: "5px 14px", fontSize: 12, fontWeight: 500,
+                  transition: "all 0.15s",
+                }}
+              >
+                {loading ? tx.refreshing : tx.refresh}
+              </button>
+            </div>
           </div>
 
-          {/* File rows */}
+          {/* Inline New Folder input */}
+          {newFolderInput !== null && (
+            <div style={{
+              padding: "10px 20px",
+              borderBottom: `1px solid ${border}`,
+              background: "rgba(255,111,216,0.03)",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <span style={{ fontSize: 18, flexShrink: 0 }}>📁</span>
+              <input
+                ref={newFolderRef}
+                value={newFolderInput}
+                onChange={e => setNewFolderInput(e.target.value.replace(/[/\\]/g, ""))}
+                onKeyDown={e => {
+                  if (e.key === "Enter") handleCreateFolder()
+                  if (e.key === "Escape") setNewFolderInput(null)
+                }}
+                placeholder={tx.folderInputPlaceholder}
+                style={{
+                  flex: 1, background: bgCard,
+                  border: `1px solid ${borderStrong}`,
+                  borderRadius: 8, padding: "6px 12px",
+                  fontSize: 13, color: textPrimary, outline: "none",
+                  fontFamily: "'Inter', system-ui, sans-serif",
+                }}
+              />
+              <button
+                onClick={handleCreateFolder}
+                disabled={!newFolderInput.trim()}
+                style={{
+                  background: newFolderInput.trim() ? pink : border,
+                  border: "none", borderRadius: 8,
+                  color: newFolderInput.trim() ? "#fff" : textMuted,
+                  cursor: newFolderInput.trim() ? "pointer" : "not-allowed",
+                  padding: "6px 14px", fontSize: 12, fontWeight: 600,
+                  transition: "all 0.15s",
+                }}
+              >
+                {tx.createFolder}
+              </button>
+              <button
+                onClick={() => setNewFolderInput(null)}
+                style={{
+                  background: "none", border: `1px solid ${border}`,
+                  borderRadius: 8, color: textSecondary,
+                  cursor: "pointer", padding: "6px 10px", fontSize: 13,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Content: folders + files */}
           {loading ? (
             <div style={{ padding: 56, textAlign: "center" }}>
               <div style={{ animation: "spin 1.5s linear infinite", display: "inline-block", marginBottom: 12 }}>
@@ -620,7 +811,7 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
               </div>
               <p style={{ margin: 0, color: textMuted, fontSize: 14 }}>{tx.loadingList}</p>
             </div>
-          ) : files.length === 0 ? (
+          ) : viewFolders.length === 0 && viewFiles.length === 0 ? (
             <div style={{ padding: 56, textAlign: "center" }}>
               <div style={{
                 width: 56, height: 56, borderRadius: 16,
@@ -628,93 +819,141 @@ export default function FileVault({ onBack }: { onBack?: () => void }) {
                 display: "flex", alignItems: "center", justifyContent: "center",
                 fontSize: 24, margin: "0 auto 16px",
               }}>
-                📭
+                {currentPath.length > 0 ? "📂" : "📭"}
               </div>
-              <p style={{ margin: "0 0 4px", color: textPrimary, fontSize: 15, fontWeight: 600 }}>{tx.emptyTitle}</p>
-              <p style={{ margin: 0, color: textMuted, fontSize: 13 }}>{tx.emptyHint}</p>
+              <p style={{ margin: "0 0 4px", color: textPrimary, fontSize: 15, fontWeight: 600 }}>
+                {currentPath.length > 0 ? tx.emptyFolderTitle : tx.emptyTitle}
+              </p>
+              <p style={{ margin: 0, color: textMuted, fontSize: 13 }}>
+                {currentPath.length > 0 ? tx.emptyFolderHint : tx.emptyHint}
+              </p>
             </div>
           ) : (
-            files.map((file, i) => {
-              const name = getFileName(file.blobName)
-              const isLast = i === files.length - 1
-              return (
+            <>
+              {/* ── Folder rows ── */}
+              {viewFolders.map(({ name, count }, i) => (
                 <div
-                  key={file.blobName}
+                  key={name}
+                  onClick={() => setCurrentPath(p => [...p, name])}
                   style={{
-                    padding: "14px 20px",
-                    borderBottom: isLast ? "none" : `1px solid ${border}`,
+                    padding: "12px 20px",
+                    borderBottom: (i < viewFolders.length - 1 || viewFiles.length > 0)
+                      ? `1px solid ${border}` : "none",
                     display: "flex", alignItems: "center", gap: 14,
-                    transition: "background 0.15s",
+                    cursor: "pointer", transition: "background 0.15s",
                   }}
                   onMouseEnter={e => (e.currentTarget.style.background = bgCardHover)}
                   onMouseLeave={e => (e.currentTarget.style.background = "")}
                 >
                   <div style={{
                     width: 40, height: 40, borderRadius: 10, flexShrink: 0,
-                    background: pinkDim, border: `1px solid ${pinkDimBorder}`,
+                    background: "rgba(250,170,50,0.1)", border: "1px solid rgba(250,170,50,0.25)",
                     display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
                   }}>
-                    {getFileIcon(name)}
+                    📁
                   </div>
-
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: textPrimary }}>
                       {name}
                     </p>
-                    <p style={{ margin: "3px 0 0", fontSize: 12, color: textMuted, display: "flex", alignItems: "center", gap: 6 }}>
-                      {formatBytes(file.size)}
-                      {file.expirationMicros && (
-                        <>
-                          <span style={{ color: borderStrong }}>·</span>
-                          {tx.expires}: {new Date(file.expirationMicros / 1000).toLocaleDateString(lang === "vi" ? "vi-VN" : "en-US")}
-                        </>
-                      )}
-                      {!file.isWritten && (
-                        <span style={{
-                          fontSize: 11, padding: "1px 8px", borderRadius: 999,
-                          background: "rgba(255,180,0,0.1)", color: "#D97706", fontWeight: 500,
-                        }}>
-                          {tx.processing}
-                        </span>
-                      )}
+                    <p style={{ margin: "3px 0 0", fontSize: 12, color: textMuted }}>
+                      {count} {tx.files}
                     </p>
                   </div>
-
-                  <button
-                    onClick={() => handleDownload(file.blobName)}
-                    disabled={downloading === file.blobName}
-                    style={{
-                      background: downloading === file.blobName ? pinkDim : pink,
-                      border: "none",
-                      borderRadius: 10,
-                      color: downloading === file.blobName ? pink : "#fff",
-                      cursor: downloading === file.blobName ? "not-allowed" : "pointer",
-                      padding: "8px 16px",
-                      fontSize: 13, fontWeight: 600,
-                      flexShrink: 0,
-                      transition: "all 0.15s",
-                    }}
-                  >
-                    {downloading === file.blobName ? tx.downloading : `↓ ${tx.download}`}
-                  </button>
+                  <span style={{ color: textMuted, fontSize: 18, flexShrink: 0 }}>›</span>
                 </div>
-              )
-            })
+              ))}
+
+              {/* ── File rows ── */}
+              {viewFiles.map((file, i) => {
+                const name = file.displayName
+                const isLast = i === viewFiles.length - 1
+                return (
+                  <div
+                    key={file.blobName}
+                    style={{
+                      padding: "14px 20px",
+                      borderBottom: isLast ? "none" : `1px solid ${border}`,
+                      display: "flex", alignItems: "center", gap: 14,
+                      transition: "background 0.15s",
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = bgCardHover)}
+                    onMouseLeave={e => (e.currentTarget.style.background = "")}
+                  >
+                    <div style={{
+                      width: 40, height: 40, borderRadius: 10, flexShrink: 0,
+                      background: pinkDim, border: `1px solid ${pinkDimBorder}`,
+                      display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+                    }}>
+                      {getFileIcon(name)}
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {name}
+                      </p>
+                      <p style={{ margin: "3px 0 0", fontSize: 12, color: textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+                        {formatBytes(file.size)}
+                        {file.expirationMicros && (
+                          <>
+                            <span style={{ color: borderStrong }}>·</span>
+                            {tx.expires}: {new Date(file.expirationMicros / 1000).toLocaleDateString(lang === "vi" ? "vi-VN" : "en-US")}
+                          </>
+                        )}
+                        {!file.isWritten && (
+                          <span style={{
+                            fontSize: 11, padding: "1px 8px", borderRadius: 999,
+                            background: "rgba(255,180,0,0.1)", color: "#D97706", fontWeight: 500,
+                          }}>
+                            {tx.processing}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleDownload(file.blobName)}
+                      disabled={downloading === file.blobName}
+                      style={{
+                        background: downloading === file.blobName ? pinkDim : pink,
+                        border: "none", borderRadius: 10,
+                        color: downloading === file.blobName ? pink : "#fff",
+                        cursor: downloading === file.blobName ? "not-allowed" : "pointer",
+                        padding: "8px 16px", fontSize: 13, fontWeight: 600,
+                        flexShrink: 0, transition: "all 0.15s",
+                      }}
+                    >
+                      {downloading === file.blobName ? tx.downloading : `↓ ${tx.download}`}
+                    </button>
+                  </div>
+                )
+              })}
+            </>
           )}
         </div>
 
         {/* Stats bar */}
-        {files.length > 0 && !loading && (
+        {(viewFolders.length > 0 || viewFiles.length > 0) && !loading && (
           <div style={{
             marginTop: 12, padding: "10px 20px",
-            display: "flex", gap: 24,
+            display: "flex", gap: 24, flexWrap: "wrap",
             fontSize: 12, color: textMuted,
           }}>
-            <span>{files.length} {lang === "vi" ? "file" : "files"}</span>
-            <span>·</span>
-            <span>{formatBytes(files.reduce((s, f) => s + f.size, 0))} {lang === "vi" ? "tổng" : "total"}</span>
-            <span>·</span>
-            <span style={{ color: pink }}>{files.filter(f => f.isWritten).length} {lang === "vi" ? "đã xác nhận" : "confirmed"}</span>
+            <span>{viewFiles.length} {tx.files}</span>
+            {viewFolders.length > 0 && (
+              <>
+                <span>·</span>
+                <span>{viewFolders.length} {tx.folders}</span>
+              </>
+            )}
+            {viewFiles.length > 0 && (
+              <>
+                <span>·</span>
+                <span>{formatBytes(viewFiles.reduce((s, f) => s + f.size, 0))} {lang === "vi" ? "tổng" : "total"}</span>
+                <span>·</span>
+                <span style={{ color: pink }}>{viewFiles.filter(f => f.isWritten).length} {lang === "vi" ? "đã xác nhận" : "confirmed"}</span>
+              </>
+            )}
           </div>
         )}
 
